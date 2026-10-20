@@ -5,12 +5,13 @@
 
 use serde::Serialize;
 
-use crate::image::{squared_distance, validate_training_set, Image, IMAGE_LEN, NUM_CLASSES};
+use crate::image::{infer_num_classes, squared_distance, validate_training_set, Image, IMAGE_LEN};
 
 pub const K: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct KnnModel {
+    pub num_classes: usize,
     /// Flat `n * IMAGE_LEN`.
     pub images: Vec<u8>,
     pub labels: Vec<u8>,
@@ -34,18 +35,19 @@ pub struct KnnEvidence {
 pub fn train(images: &[Image], labels: &[u8]) -> KnnModel {
     validate_training_set(images, labels);
     assert!(images.len() >= K, "need at least {K} training images");
+    let num_classes = infer_num_classes(labels);
     let mut flat = Vec::with_capacity(images.len() * IMAGE_LEN);
     for image in images {
         flat.extend_from_slice(image.pixels());
     }
     KnnModel {
+        num_classes,
         images: flat,
         labels: labels.to_vec(),
     }
 }
 
 pub fn predict(model: &KnnModel, image: &Image) -> KnnEvidence {
-    // (squared distance, index), sorted ascending; ties keep the lower index.
     let mut nearest: Vec<(u32, usize)> = Vec::with_capacity(K + 1);
     for (index, train) in model.images.chunks_exact(IMAGE_LEN).enumerate() {
         let d = squared_distance(image.pixels(), train);
@@ -60,7 +62,7 @@ pub fn predict(model: &KnnModel, image: &Image) -> KnnEvidence {
         nearest.truncate(K);
     }
 
-    let mut votes = vec![0u8; NUM_CLASSES];
+    let mut votes = vec![0u8; model.num_classes];
     let neighbors: Vec<Neighbor> = nearest
         .iter()
         .map(|&(d, index)| {

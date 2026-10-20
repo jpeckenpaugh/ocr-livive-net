@@ -1,5 +1,7 @@
-use ocr::image::{argmax, softmax, Image, IMAGE_LEN, IMAGE_SIDE, NUM_CLASSES};
+use ocr::image::{argmax, softmax, Image, IMAGE_LEN, IMAGE_SIDE};
 use ocr::{centroid, knn, mlp, perceptron, preprocess};
+
+const NUM_CLASSES: usize = 10;
 
 /// Ten synthetic digits: class `c` lights row band `c` (rows 2c..2c+2).
 fn synthetic() -> (Vec<Image>, Vec<u8>) {
@@ -66,7 +68,7 @@ fn perceptron_and_mlp_fit_synthetic_set() {
 fn mlp_gradient_matches_finite_difference() {
     let (images, labels) = synthetic();
     let x = ocr::image::scale_images(&images);
-    let model = mlp::init(1);
+    let model = mlp::init(10, 1);
     let batch: Vec<usize> = (0..images.len()).collect();
     let g = mlp::gradient(&model, &x, &labels, &batch);
     let eps = 1e-2;

@@ -1,13 +1,13 @@
 //! Shared types and arithmetic.
 //!
 //! An `Image` is 784 bytes, row-major 28x28, 0 = background, 255 = ink
-//! (MNIST convention). Index of `(x, y)` is `y * 28 + x`. Labels are digits 0..=9.
+//! (MNIST convention). Index of `(x, y)` is `y * 28 + x`.
+//! Supports arbitrary class counts (e.g. 10 for digits, 26 for letters, 36 for alphanumeric).
 
 use serde::Serialize;
 
 pub const IMAGE_SIDE: usize = 28;
 pub const IMAGE_LEN: usize = IMAGE_SIDE * IMAGE_SIDE;
-pub const NUM_CLASSES: usize = 10;
 pub const DEFAULT_SEED: u64 = 0;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -47,17 +47,18 @@ pub fn split_images(flat: &[u8]) -> Vec<Image> {
         .collect()
 }
 
+pub fn infer_num_classes(labels: &[u8]) -> usize {
+    assert!(!labels.is_empty(), "labels slice is empty");
+    (labels.iter().copied().max().unwrap_or(0) as usize) + 1
+}
+
 pub fn validate_training_set(images: &[Image], labels: &[u8]) {
     assert!(!images.is_empty(), "training set is empty");
     assert_eq!(images.len(), labels.len(), "image/label count mismatch");
-    assert!(
-        labels.iter().all(|&l| (l as usize) < NUM_CLASSES),
-        "labels must be 0..{NUM_CLASSES}"
-    );
 }
 
-pub fn class_counts(labels: &[u8]) -> [usize; NUM_CLASSES] {
-    let mut counts = [0; NUM_CLASSES];
+pub fn class_counts(labels: &[u8], num_classes: usize) -> Vec<usize> {
+    let mut counts = vec![0; num_classes];
     for &l in labels {
         counts[l as usize] += 1;
     }

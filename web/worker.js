@@ -3,7 +3,6 @@ import init, { trainCentroid, trainKnn, trainPerceptron, trainMlp } from "../pkg
 
 const SEED = 0;
 let models = {};
-let currentTrainSize = 10000;
 let datasets = {};
 
 async function fetchBytes(path) {
@@ -20,66 +19,89 @@ function predictAll(image) {
   return out;
 }
 
-async function loadDataset(size) {
-  if (datasets[size]) return datasets[size];
-  postMessage({ type: "status", text: `Downloading training set (${size} samples)…` });
+async function loadDataset(datasetType, size) {
+  const key = `${datasetType}-${size}`;
+  if (datasets[key]) return datasets[key];
+  postMessage({ type: "progress", step: "download", text: `Downloading ${datasetType} training data (${size} samples)…`, pct: 15 });
+  
+  let imgPath, lblPath;
+  if (datasetType === "digits") {
+    imgPath = `../data/train-${size}.u8`;
+    lblPath = `../data/train-${size}-labels.u8`;
+  } else if (datasetType === "letters") {
+    imgPath = `../data/train-letters-${size}.u8`;
+    lblPath = `../data/train-letters-${size}-labels.u8`;
+  } else {
+    // Alphanumeric
+    imgPath = `../data/train-alphanumeric-10000.u8`;
+    lblPath = `../data/train-alphanumeric-10000-labels.u8`;
+  }
+
   const [images, labels] = await Promise.all([
-    fetchBytes(`../data/train-${size}.u8`),
-    fetchBytes(`../data/train-${size}-labels.u8`),
+    fetchBytes(imgPath),
+    fetchBytes(lblPath),
   ]);
-  datasets[size] = { images, labels };
-  return datasets[size];
+  datasets[key] = { images, labels };
+  return datasets[key];
 }
 
-async function getTestSet(fullTest) {
-  const testKey = fullTest ? "test-10000" : "test-1000";
+async function getTestSet(datasetType, fullTest) {
+  const testKey = `${datasetType}-${fullTest ? "10k" : "1k"}`;
   if (!datasets[testKey]) {
-    postMessage({ type: "status", text: `Loading ${fullTest ? "10,000" : "1,000"} test samples…` });
+    postMessage({ type: "progress", step: "download_test", text: `Loading test evaluation set…`, pct: 30 });
+    let imgPath, lblPath;
+    if (datasetType === "digits") {
+      imgPath = fullTest ? "../data/test-10000.u8" : "../data/test-1000.u8";
+      lblPath = fullTest ? "../data/test-10000-labels.u8" : "../data/test-1000-labels.u8";
+    } else if (datasetType === "letters") {
+      imgPath = "../data/test-letters-1000.u8";
+      lblPath = "../data/test-letters-1000-labels.u8";
+    } else {
+      imgPath = "../data/test-alphanumeric-1000.u8";
+      lblPath = "../data/test-alphanumeric-1000-labels.u8";
+    }
     const [images, labels] = await Promise.all([
-      fetchBytes(`../data/${testKey}.u8`),
-      fetchBytes(`../data/${testKey}-labels.u8`),
+      fetchBytes(imgPath),
+      fetchBytes(lblPath),
     ]);
     datasets[testKey] = { images, labels };
   }
   return datasets[testKey];
 }
 
-async function retrain(size, fullTest = false) {
-  currentTrainSize = size;
-  const trainData = await loadDataset(size);
-  const testData = await getTestSet(fullTest);
+async function retrain(datasetType, size, fullTest = false) {
+  const trainData = await loadDataset(datasetType, size);
+  const testData = await getTestSet(datasetType, fullTest);
 
   models = {};
   const trainers = [
-    ["centroid", trainCentroid],
-    ["knn", trainKnn],
-    ["perceptron", trainPerceptron],
-    ["mlp", trainMlp],
+    ["centroid", trainCentroid, 45],
+    ["knn", trainKnn, 60],
+    ["perceptron", trainPerceptron, 75],
+    ["mlp", trainMlp, 90],
   ];
 
   const modelData = {};
   const trainMs = {};
 
-  for (const [name, trainFn] of trainers) {
-    postMessage({ type: "status", text: `Training ${name} on ${size} samples…` });
+  for (const [name, trainFn, pct] of trainers) {
+    postMessage({ type: "progress", step: `train_${name}`, text: `Training ${name} on ${trainData.labels.length} samples…`, pct });
     const t0 = performance.now();
     models[name] = trainFn(trainData.images, trainData.labels, SEED);
     trainMs[name] = performance.now() - t0;
     modelData[name] = models[name].modelData();
   }
 
-  // Scoring & confusion matrix
   const testLen = testData.labels.length;
-  // If k-NN on 60,000 and full 10,000 test, clamp k-NN evaluation to 1,000 to keep UI responsive
-  const knnLimit = (size === 60000 && testLen > 1000) ? 1000 : testLen;
-  postMessage({ type: "status", text: `Evaluating test accuracy on ${testLen} samples…` });
+  const numClasses = datasetType === "digits" ? 10 : datasetType === "letters" ? 26 : 36;
+  postMessage({ type: "progress", step: "scoring", text: `Evaluating test set (${testLen} samples)…`, pct: 95 });
 
   const correct = { centroid: 0, knn: 0, perceptron: 0, mlp: 0 };
   const confusion = {
-    centroid: Array.from({ length: 10 }, () => new Array(10).fill(0)),
-    knn: Array.from({ length: 10 }, () => new Array(10).fill(0)),
-    perceptron: Array.from({ length: 10 }, () => new Array(10).fill(0)),
-    mlp: Array.from({ length: 10 }, () => new Array(10).fill(0)),
+    centroid: Array.from({ length: numClasses }, () => new Array(numClasses).fill(0)),
+    knn: Array.from({ length: numClasses }, () => new Array(numClasses).fill(0)),
+    perceptron: Array.from({ length: numClasses }, () => new Array(numClasses).fill(0)),
+    mlp: Array.from({ length: numClasses }, () => new Array(numClasses).fill(0)),
   };
   const disagreements = [];
 
@@ -89,14 +111,14 @@ async function retrain(size, fullTest = false) {
 
     const preds = {};
     for (const [mName, model] of Object.entries(models)) {
-      if (mName === "knn" && i >= knnLimit) continue;
       const res = model.predict(imgSlice);
       preds[mName] = res.prediction;
-      confusion[mName][truth][res.prediction]++;
+      if (truth < numClasses && res.prediction < numClasses) {
+        confusion[mName][truth][res.prediction]++;
+      }
       if (res.prediction === truth) correct[mName]++;
     }
 
-    // Capture disagreements (where models disagree with each other or truth)
     if (disagreements.length < 50) {
       const predVals = Object.values(preds);
       const allSame = predVals.every(v => v === predVals[0]);
@@ -113,14 +135,16 @@ async function retrain(size, fullTest = false) {
 
   const accuracy = {
     centroid: correct.centroid / testLen,
-    knn: correct.knn / (knnLimit),
+    knn: correct.knn / testLen,
     perceptron: correct.perceptron / testLen,
     mlp: correct.mlp / testLen,
   };
 
   postMessage({
     type: "ready",
+    datasetType,
     trainSize: size,
+    numClasses,
     modelData,
     accuracy,
     trainMs,
@@ -131,11 +155,14 @@ async function retrain(size, fullTest = false) {
 }
 
 onmessage = async ({ data }) => {
-  if (data.type === "predict") {
+  if (data.type === "init_wasm") {
+    await init();
+    postMessage({ type: "wasm_initialized" });
+  } else if (data.type === "predict") {
     postMessage({ type: "prediction", id: data.id, results: predictAll(data.image) });
   } else if (data.type === "retrain") {
     try {
-      await retrain(data.size, data.fullTest);
+      await retrain(data.datasetType, data.size, data.fullTest);
     } catch (e) {
       postMessage({ type: "error", text: String(e) });
     }
@@ -150,10 +177,3 @@ onmessage = async ({ data }) => {
     }
   }
 };
-
-async function boot() {
-  await init();
-  await retrain(10000, false);
-}
-
-boot().catch((e) => postMessage({ type: "error", text: String(e) }));

@@ -8,8 +8,10 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 // Global App State
 const state = {
   activeTab: "playground",
+  datasetType: "digits", // 'digits' | 'letters' | 'alphanumeric'
   trainSize: 10000,
   fullTest: false,
+  numClasses: 10,
   testImages: null,
   testLabels: null,
   testIndex: 0,
@@ -25,21 +27,30 @@ const state = {
 
 const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
 
+function classLabel(idx) {
+  if (state.datasetType === "digits") return String(idx);
+  if (state.datasetType === "letters") return String.fromCharCode(65 + idx);
+  // Alphanumeric: 0..9 are digits, 10..35 are A..Z
+  if (idx < 10) return String(idx);
+  return String.fromCharCode(65 + (idx - 10));
+}
+
 // Code files content cache
 const rustFiles = {
   centroid: {
     title: "src/centroid.rs — Class Mean Distance",
-    rationale: "Zero hyperparameter model. Computes 10 prototype images in f64 to avoid overflow. Minimum Euclidean distance decision.",
+    rationale: "Zero hyperparameter model. Dynamically infers num_classes from dataset labels. Computes class prototypes in f64 to avoid overflow.",
     code: `pub fn train(images: &[Image], labels: &[u8]) -> CentroidModel {
-    let mut sums = vec![0.0f64; NUM_CLASSES * IMAGE_LEN];
+    let num_classes = infer_num_classes(labels);
+    let counts = class_counts(labels, num_classes);
+    let mut sums = vec![0.0f64; num_classes * IMAGE_LEN];
     for (image, &label) in images.iter().zip(labels) {
         let row = &mut sums[label as usize * IMAGE_LEN..(label as usize + 1) * IMAGE_LEN];
         for (s, &p) in row.iter_mut().zip(image.pixels()) {
             *s += p as f64;
         }
     }
-    // Divide pixel sums by count of each digit class
-    CentroidModel { means, counts }
+    CentroidModel { num_classes, means, counts }
 }`
   },
   knn: {
@@ -56,19 +67,19 @@ const rustFiles = {
         nearest.insert(pos, (d, index));
         nearest.truncate(K);
     }
-    // Majority vote with tie-breaker to lowest index
 }`
   },
   perceptron: {
     title: "src/perceptron.rs — Linear Softmax",
-    rationale: "10 affine hyperplanes. Cross-entropy log loss with hand-written gradient. Numerically stable softmax via max subtraction.",
+    rationale: "C affine hyperplanes. Cross-entropy log loss with hand-written gradient. Numerically stable softmax via max subtraction.",
     code: `pub fn train(images: &[Image], labels: &[u8], seed: u64) -> PerceptronModel {
+    let num_classes = infer_num_classes(labels);
     for _ in 0..EPOCHS {
         for batch in order.chunks(BATCH_SIZE) {
             for &n in batch {
                 let xn = &x[n * IMAGE_LEN..(n + 1) * IMAGE_LEN];
                 let p = softmax(&logits(&model, xn));
-                for c in 0..NUM_CLASSES {
+                for c in 0..num_classes {
                     let dz = (p[c] - if c == labels[n] as usize { 1.0 } else { 0.0 }) * inv_n;
                     grad_b[c] += dz;
                     for (g, &xi) in grad_w[c * IMAGE_LEN..(c + 1) * IMAGE_LEN].iter_mut().zip(xn) {
@@ -82,11 +93,11 @@ const rustFiles = {
   },
   mlp: {
     title: "src/mlp.rs — Hand-Written Backpropagation with ReLU",
-    rationale: "784→32→10 architecture. He initialization (±sqrt(6/fan_in)). ReLU derivative is step function [z > 0], preventing gradient vanishing.",
+    rationale: "784→64→C architecture. He initialization (±sqrt(6/fan_in)). ReLU derivative is step function [z > 0], preventing gradient vanishing.",
     code: `// Backpropagation pass inside batch loop:
 let (z1, a, z2) = forward(model, xn);
 let p = softmax(&z2);
-for c in 0..NUM_CLASSES {
+for c in 0..model.num_classes {
     dz2[c] = (p[c] - if c == labels[n] as usize { 1.0 } else { 0.0 }) * inv_n;
     for h in 0..HIDDEN {
         g.w2[c * HIDDEN + h] += dz2[c] * a[h];
@@ -95,7 +106,7 @@ for c in 0..NUM_CLASSES {
 for h in 0..HIDDEN {
     if z1[h] <= 0.0 { continue; } // ReLU gradient gate
     let mut dz1 = 0.0;
-    for c in 0..NUM_CLASSES {
+    for c in 0..model.num_classes {
         dz1 += dz2[c] * model.w2[c * HIDDEN + h];
     }
     for (gw, &xi) in g.w1[h * IMAGE_LEN..(h + 1) * IMAGE_LEN].iter_mut().zip(xn) {
@@ -260,58 +271,145 @@ function setupRouter() {
   switchTab(initial);
 }
 
-// Global Size Control
-function setupSizeControls() {
-  $$(".size-btn").forEach((btn) => {
-    btn.onclick = () => {
-      const size = Number(btn.dataset.size);
-      if (size === state.trainSize) return;
-      $$(".size-btn").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      state.trainSize = size;
-      triggerRetrain();
+// Training Setup Modal & Controls
+function setupTrainingModal() {
+  const modal = $("#modal-training-setup");
+  $("#open-train-modal-btn").onclick = () => modal.showModal();
+
+  // Dataset radio changes
+  $$("input[name='dataset-choice']").forEach((radio) => {
+    radio.onchange = () => {
+      const choice = radio.value;
+      const size60k = $("#size-60k-btn");
+      if (choice === "digits") {
+        size60k.style.display = "inline-block";
+      } else {
+        size60k.style.display = "none";
+        if (state.trainSize === 60000) {
+          state.trainSize = 10000;
+          $$(".modal-size-btn").forEach(b => b.classList.toggle("active", b.dataset.size === "10000"));
+        }
+      }
+      updateWarningText();
     };
   });
 
-  $("#full-test-check").onchange = (e) => {
-    state.fullTest = e.target.checked;
-    triggerRetrain();
+  // Size buttons in modal
+  $$(".modal-size-btn").forEach((btn) => {
+    btn.onclick = () => {
+      $$(".modal-size-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.trainSize = Number(btn.dataset.size);
+      updateWarningText();
+    };
+  });
+
+  function updateWarningText() {
+    const choice = $('input[name="dataset-choice"]:checked').value;
+    const sz = state.trainSize;
+    let est = "~4 seconds";
+    if (sz === 10) est = "< 0.1s";
+    else if (sz === 100) est = "~0.2s";
+    else if (sz === 1000) est = "~0.5s";
+    else if (sz === 60000) est = "~25 seconds (may warm CPU)";
+
+    $("#time-warning-text").textContent = `⚡ Training on ${sz} samples (${choice}): estimated time ${est}.`;
+  }
+
+  $("#start-train-btn").onclick = async () => {
+    const choice = $('input[name="dataset-choice"]:checked').value;
+    const fullTest = $("#modal-full-test-check").checked;
+    state.datasetType = choice;
+    state.fullTest = fullTest;
+
+    $("#train-progress-block").style.display = "block";
+    $("#start-train-btn").disabled = true;
+
+    worker.postMessage({
+      type: "retrain",
+      datasetType: state.datasetType,
+      size: state.trainSize,
+      fullTest: state.fullTest,
+    });
   };
 }
 
-function triggerRetrain() {
-  const pill = $("#status-pill");
-  pill.className = "status-pill";
-  pill.textContent = `Retraining on ${state.trainSize} samples…`;
-  worker.postMessage({ type: "retrain", size: state.trainSize, fullTest: state.fullTest });
-}
-
 // Worker message handler
-worker.onmessage = ({ data }) => {
+worker.onmessage = async ({ data }) => {
   const pill = $("#status-pill");
-  if (data.type === "status") {
+  if (data.type === "progress") {
     pill.className = "status-pill";
     pill.textContent = data.text;
+    $("#train-progress-status").textContent = data.text;
+    $("#train-progress-pct").textContent = `${data.pct}%`;
+    $("#train-progress-fill").style.width = `${data.pct}%`;
   } else if (data.type === "error") {
     pill.className = "status-pill error";
     pill.textContent = data.text;
+    $("#train-progress-block").style.display = "none";
+    $("#start-train-btn").disabled = false;
   } else if (data.type === "ready") {
     pill.className = "status-pill ready";
     pill.textContent = `Trained on ${data.trainSize} samples · Ready`;
+    state.numClasses = data.numClasses;
     state.modelData = data.modelData;
     state.accuracy = data.accuracy;
     state.trainMs = data.trainMs;
     state.confusion = data.confusion;
     state.disagreements = data.disagreements;
+
+    $("#active-profile-chip").textContent = `Profile: ${state.datasetType.toUpperCase()} · ${data.trainSize} samples`;
+    $("#train-progress-block").style.display = "none";
+    $("#start-train-btn").disabled = false;
+    $("#modal-training-setup").close();
+
+    // Reload test pool for the active dataset
+    await loadTestPool();
     updateAccuracyChips();
     setInputImage(state.currentImage);
     if (state.activeTab === "experiments") renderCharts();
   } else if (data.type === "prediction" && data.id === state.requestId) {
     renderPredictionResults(data.results);
   } else if (data.type === "onnx_exported") {
-    downloadBlob(data.bytes, `${data.method}.onnx`);
+    downloadBlob(data.bytes, `${data.method}_${state.datasetType}.onnx`);
   }
 };
+
+async function loadTestPool() {
+  let imgPath, lblPath;
+  if (state.datasetType === "digits") {
+    imgPath = "data/test-1000.u8";
+    lblPath = "data/test-1000-labels.u8";
+  } else if (state.datasetType === "letters") {
+    imgPath = "data/test-letters-1000.u8";
+    lblPath = "data/test-letters-1000-labels.u8";
+  } else {
+    imgPath = "data/test-alphanumeric-1000.u8";
+    lblPath = "data/test-alphanumeric-1000-labels.u8";
+  }
+
+  const [tImgs, tLbls] = await Promise.all([
+    fetch(imgPath).then(r => r.arrayBuffer()),
+    fetch(lblPath).then(r => r.arrayBuffer()),
+  ]);
+  state.testImages = new Uint8Array(tImgs);
+  state.testLabels = new Uint8Array(tLbls);
+
+  $("#test-pool-meta").textContent = `${state.testLabels.length} test samples`;
+  $("#test-index-input").max = state.testLabels.length - 1;
+  loadTestIndex(0);
+}
+
+function loadTestIndex(idx) {
+  if (!state.testImages) return;
+  const maxIdx = state.testLabels.length;
+  state.testIndex = ((idx % maxIdx) + maxIdx) % maxIdx;
+  $("#test-index-input").value = state.testIndex;
+  const slice = state.testImages.slice(state.testIndex * LEN, (state.testIndex + 1) * LEN);
+  const truth = state.testLabels[state.testIndex];
+  $("#test-sample-meta").textContent = `Index #${state.testIndex} · True label: ${classLabel(truth)}`;
+  setInputImage(slice);
+}
 
 function updateAccuracyChips() {
   for (const [m, acc] of Object.entries(state.accuracy)) {
@@ -322,23 +420,25 @@ function updateAccuracyChips() {
 
 function renderPredictionResults(res) {
   // Centroid
-  $("#pred-centroid").textContent = res.centroid.prediction;
+  $("#pred-centroid").textContent = classLabel(res.centroid.prediction);
   const meansStrip = $("#means-strip");
   meansStrip.innerHTML = "";
-  res.centroid.distances.forEach((d, k) => {
+  // Show top 10 relevant means or all if <= 10
+  const maxMeans = Math.min(10, state.numClasses);
+  for (let k = 0; k < maxMeans; k++) {
     const fig = document.createElement("figure");
     fig.className = "thumb" + (k === res.centroid.prediction ? " hit" : "");
     const c = document.createElement("canvas");
     c.width = c.height = 36;
     drawGray(c, state.modelData.centroid.means.slice(k * LEN, (k + 1) * LEN).map(Math.round));
     const cap = document.createElement("figcaption");
-    cap.textContent = `${k}:${Math.round(d)}`;
+    cap.textContent = `${classLabel(k)}:${Math.round(res.centroid.distances[k])}`;
     fig.append(c, cap);
     meansStrip.append(fig);
-  });
+  }
 
   // k-NN
-  $("#pred-knn").textContent = res.knn.prediction;
+  $("#pred-knn").textContent = classLabel(res.knn.prediction);
   const knnStrip = $("#knn-strip");
   knnStrip.innerHTML = "";
   res.knn.neighbors.forEach((n) => {
@@ -346,15 +446,14 @@ function renderPredictionResults(res) {
     fig.className = "thumb" + (n.label === res.knn.prediction ? " hit" : "");
     const c = document.createElement("canvas");
     c.width = c.height = 36;
-    // Extract thumbnail from testImages or placeholder
     const cap = document.createElement("figcaption");
-    cap.textContent = `${n.label} (d=${Math.round(n.distance)})`;
+    cap.textContent = `${classLabel(n.label)} (d=${Math.round(n.distance)})`;
     fig.append(c, cap);
     knnStrip.append(fig);
   });
 
   // Perceptron
-  $("#pred-perceptron").textContent = res.perceptron.prediction;
+  $("#pred-perceptron").textContent = classLabel(res.perceptron.prediction);
   renderBars($("#bars-perceptron"), res.perceptron.probs, res.perceptron.prediction);
   const wSlice = state.modelData.perceptron.weights.slice(
     res.perceptron.prediction * LEN,
@@ -363,7 +462,7 @@ function renderPredictionResults(res) {
   drawSigned($("#perceptron-heatmap"), wSlice);
 
   // MLP
-  $("#pred-mlp").textContent = res.mlp.prediction;
+  $("#pred-mlp").textContent = classLabel(res.mlp.prediction);
   renderBars($("#bars-mlp"), res.mlp.probs, res.mlp.prediction);
   const hiddenContainer = $("#mlp-hidden-activations");
   hiddenContainer.innerHTML = "";
@@ -387,17 +486,22 @@ function renderPredictionResults(res) {
   ];
   const freq = {};
   preds.forEach(p => freq[p] = (freq[p] || 0) + 1);
-  const [topDigit, count] = Object.entries(freq).sort((a,b) => b[1] - a[1])[0];
-  $("#consensus-text").textContent = `Consensus: ${count}/4 methods agree on digit ${topDigit}`;
+  const [topIdx, count] = Object.entries(freq).sort((a,b) => b[1] - a[1])[0];
+  $("#consensus-text").textContent = `Consensus: ${count}/4 methods agree on '${classLabel(Number(topIdx))}'`;
 }
 
 function renderBars(container, probs, pred) {
   container.innerHTML = "";
-  probs.forEach((p, digit) => {
+  // Show top 6 candidates if many classes
+  const indexed = probs.map((p, idx) => ({ p, idx }));
+  indexed.sort((a, b) => b.p - a.p);
+  const topList = indexed.slice(0, 8);
+
+  topList.forEach(({ p, idx }) => {
     const row = document.createElement("div");
-    row.className = "bar-row" + (digit === pred ? " hit" : "");
+    row.className = "bar-row" + (idx === pred ? " hit" : "");
     row.innerHTML = `
-      <span>${digit}</span>
+      <span>${classLabel(idx)}</span>
       <div class="bar-track"><div class="bar-fill" style="width: ${(p * 100).toFixed(1)}%"></div></div>
       <span>${(p * 100).toFixed(1)}%</span>
     `;
@@ -407,20 +511,10 @@ function renderBars(container, probs, pred) {
 
 // Test sample selector
 function setupTestSelector() {
-  const loadIndex = (idx) => {
-    if (!state.testImages) return;
-    state.testIndex = ((idx % 1000) + 1000) % 1000;
-    $("#test-index-input").value = state.testIndex;
-    const slice = state.testImages.slice(state.testIndex * LEN, (state.testIndex + 1) * LEN);
-    const truth = state.testLabels[state.testIndex];
-    $("#test-sample-meta").textContent = `Index #${state.testIndex} · True label: ${truth}`;
-    setInputImage(slice);
-  };
-
-  $("#prev-test-btn").onclick = () => loadIndex(state.testIndex - 1);
-  $("#next-test-btn").onclick = () => loadIndex(state.testIndex + 1);
-  $("#random-test-btn").onclick = () => loadIndex(Math.floor(Math.random() * 1000));
-  $("#test-index-input").onchange = (e) => loadIndex(Number(e.target.value) || 0);
+  $("#prev-test-btn").onclick = () => loadTestIndex(state.testIndex - 1);
+  $("#next-test-btn").onclick = () => loadTestIndex(state.testIndex + 1);
+  $("#random-test-btn").onclick = () => loadTestIndex(Math.floor(Math.random() * (state.testLabels?.length || 1000)));
+  $("#test-index-input").onchange = (e) => loadTestIndex(Number(e.target.value) || 0);
 
   const grid = $("#input-grid-canvas");
   grid.addEventListener("mousemove", (e) => {
@@ -450,7 +544,6 @@ function renderCharts() {
     { key: "mlp", label: "MLP (ReLU)", color: "#ef4444" },
   ];
 
-  // Draw axes
   ctx.strokeStyle = "#e5e7eb";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -464,7 +557,6 @@ function renderCharts() {
   }
   ctx.stroke();
 
-  // Plot lines
   methods.forEach((m) => {
     ctx.strokeStyle = m.color;
     ctx.lineWidth = 2.5;
@@ -477,7 +569,6 @@ function renderCharts() {
     });
     ctx.stroke();
 
-    // Points
     sizes.forEach((sz, idx) => {
       const val = state.baselineData[String(sz)][m.key];
       const x = 70 + (idx / (sizes.length - 1)) * (w - 110);
@@ -493,10 +584,11 @@ function renderCharts() {
   if (state.confusion) {
     const table = $("#confusion-table");
     const mat = state.confusion.mlp;
-    let html = "<tr><th>Truth \\ Pred</th>" + Array.from({length: 10}, (_, i) => `<th>${i}</th>`).join("") + "</tr>";
-    for (let r = 0; r < 10; r++) {
-      html += `<tr><th>${r}</th>`;
-      for (let c = 0; c < 10; c++) {
+    const n = Math.min(15, state.numClasses);
+    let html = "<tr><th>Truth \\ Pred</th>" + Array.from({length: n}, (_, i) => `<th>${classLabel(i)}</th>`).join("") + "</tr>";
+    for (let r = 0; r < n; r++) {
+      html += `<tr><th>${classLabel(r)}</th>`;
+      for (let c = 0; c < n; c++) {
         const count = mat[r][c];
         const cls = r === c ? "correct" : count > 0 ? "error" : "";
         html += `<td class="${cls}">${count}</td>`;
@@ -524,11 +616,11 @@ function renderCharts() {
       const meta = document.createElement("div");
       meta.style.fontSize = "10px";
       meta.style.fontFamily = "monospace";
-      meta.innerHTML = `Truth: <b>${item.truth}</b><br>MLP: ${item.predictions.mlp}<br>Cent: ${item.predictions.centroid}`;
+      meta.innerHTML = `Truth: <b>${classLabel(item.truth)}</b><br>MLP: ${classLabel(item.predictions.mlp)}<br>Cent: ${classLabel(item.predictions.centroid)}`;
       card.append(meta);
       card.onclick = () => {
         state.testIndex = item.index;
-        $("#test-sample-meta").textContent = `Index #${item.index} · True label: ${item.truth}`;
+        $("#test-sample-meta").textContent = `Index #${item.index} · True label: ${classLabel(item.truth)}`;
         setInputImage(new Uint8Array(item.image));
         location.hash = "#/playground";
       };
@@ -586,32 +678,25 @@ function downloadBlob(bytes, filename) {
   URL.revokeObjectURL(url);
 }
 
-// Initial Boot
+// Initial Boot: does NOT auto-train; initializes WASM and shows training modal
 async function boot() {
   await init();
+  worker.postMessage({ type: "init_wasm" });
+
   setupRouter();
   setupDrawing();
   setupTestSelector();
-  setupSizeControls();
+  setupTrainingModal();
   setupCodeInspector();
   setupModals();
   setupOnnx();
 
-  // Load test samples and baseline JSON
-  const [testImgs, testLbls, baseline] = await Promise.all([
-    fetch("data/test-1000.u8").then(r => r.arrayBuffer()),
-    fetch("data/test-1000-labels.u8").then(r => r.arrayBuffer()),
-    fetch("data/baseline.json").then(r => r.json()),
-  ]);
+  // Load baseline JSON
+  state.baselineData = await fetch("data/baseline.json").then(r => r.json());
 
-  state.testImages = new Uint8Array(testImgs);
-  state.testLabels = new Uint8Array(testLbls);
-  state.baselineData = baseline;
-
-  // Set initial sample
-  const firstSample = state.testImages.slice(0, LEN);
-  $("#test-sample-meta").textContent = `Index #0 · True label: ${state.testLabels[0]}`;
-  setInputImage(firstSample);
+  // Show training setup modal to let user choose configuration
+  const modal = $("#modal-training-setup");
+  modal.showModal();
 }
 
 boot().catch((err) => {

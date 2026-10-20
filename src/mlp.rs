@@ -1,4 +1,4 @@
-//! One-hidden-layer MLP, 784 → 32 (ReLU) → 10 (softmax). Hand-written backprop.
+//! One-hidden-layer MLP, 784 → 64 (ReLU) → C (softmax). Hand-written backprop.
 //!
 //! Forward:
 //! `z1_h = b1_h + Σ_i w1[h,i] · x_i`,  `a_h = max(0, z1_h)`
@@ -15,18 +15,19 @@
 use serde::Serialize;
 
 use crate::image::{
-    argmax, cross_entropy, dot, scale, scale_images, softmax, validate_training_set, Image,
-    IMAGE_LEN, NUM_CLASSES,
+    argmax, cross_entropy, dot, infer_num_classes, scale, scale_images, softmax,
+    validate_training_set, Image, IMAGE_LEN,
 };
 use crate::rng::SplitMix64;
 
-pub const HIDDEN: usize = 32;
+pub const HIDDEN: usize = 64;
 pub const LEARNING_RATE: f32 = 0.1;
 pub const EPOCHS: u32 = 15;
 pub const BATCH_SIZE: usize = 32;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Hyperparams {
+    pub num_classes: u32,
     pub hidden_units: u32,
     pub activation: &'static str,
     pub learning_rate: f32,
@@ -36,10 +37,11 @@ pub struct Hyperparams {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MlpModel {
+    pub num_classes: usize,
     /// `HIDDEN * IMAGE_LEN`, unit-major.
     pub w1: Vec<f32>,
     pub b1: Vec<f32>,
-    /// `NUM_CLASSES * HIDDEN`, class-major.
+    /// `num_classes * HIDDEN`, class-major.
     pub w2: Vec<f32>,
     pub b2: Vec<f32>,
     pub loss_curve: Vec<f32>,
@@ -60,23 +62,25 @@ fn forward(model: &MlpModel, x: &[f32]) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
         .map(|h| model.b1[h] + dot(&model.w1[h * IMAGE_LEN..(h + 1) * IMAGE_LEN], x))
         .collect();
     let a: Vec<f32> = z1.iter().map(|&z| z.max(0.0)).collect();
-    let z2: Vec<f32> = (0..NUM_CLASSES)
+    let z2: Vec<f32> = (0..model.num_classes)
         .map(|c| model.b2[c] + dot(&model.w2[c * HIDDEN..(c + 1) * HIDDEN], &a))
         .collect();
     (z1, a, z2)
 }
 
-pub fn init(seed: u64) -> MlpModel {
+pub fn init(num_classes: usize, seed: u64) -> MlpModel {
     let mut rng = SplitMix64::new(seed);
     let l1 = (6.0 / IMAGE_LEN as f32).sqrt();
     let l2 = (6.0 / HIDDEN as f32).sqrt();
     MlpModel {
+        num_classes,
         w1: (0..HIDDEN * IMAGE_LEN).map(|_| rng.uniform(l1)).collect(),
         b1: vec![0.0; HIDDEN],
-        w2: (0..NUM_CLASSES * HIDDEN).map(|_| rng.uniform(l2)).collect(),
-        b2: vec![0.0; NUM_CLASSES],
+        w2: (0..num_classes * HIDDEN).map(|_| rng.uniform(l2)).collect(),
+        b2: vec![0.0; num_classes],
         loss_curve: Vec::with_capacity(EPOCHS as usize),
         hyperparams: Hyperparams {
+            num_classes: num_classes as u32,
             hidden_units: HIDDEN as u32,
             activation: "relu",
             learning_rate: LEARNING_RATE,
@@ -100,8 +104,8 @@ pub fn gradient(model: &MlpModel, x: &[f32], labels: &[u8], batch: &[usize]) -> 
         loss: 0.0,
         w1: vec![0.0; HIDDEN * IMAGE_LEN],
         b1: vec![0.0; HIDDEN],
-        w2: vec![0.0; NUM_CLASSES * HIDDEN],
-        b2: vec![0.0; NUM_CLASSES],
+        w2: vec![0.0; model.num_classes * HIDDEN],
+        b2: vec![0.0; model.num_classes],
     };
     let inv_n = 1.0 / batch.len() as f32;
     let mut loss = 0.0f64;
@@ -111,8 +115,8 @@ pub fn gradient(model: &MlpModel, x: &[f32], labels: &[u8], batch: &[usize]) -> 
         let p = softmax(&z2);
         loss += cross_entropy(&p, labels[n]) as f64;
 
-        let mut dz2 = [0.0f32; NUM_CLASSES];
-        for c in 0..NUM_CLASSES {
+        let mut dz2 = vec![0.0f32; model.num_classes];
+        for c in 0..model.num_classes {
             dz2[c] = (p[c] - if c == labels[n] as usize { 1.0 } else { 0.0 }) * inv_n;
             g.b2[c] += dz2[c];
             for h in 0..HIDDEN {
@@ -124,7 +128,7 @@ pub fn gradient(model: &MlpModel, x: &[f32], labels: &[u8], batch: &[usize]) -> 
                 continue;
             }
             let mut dz1 = 0.0;
-            for c in 0..NUM_CLASSES {
+            for c in 0..model.num_classes {
                 dz1 += dz2[c] * model.w2[c * HIDDEN + h];
             }
             g.b1[h] += dz1;
@@ -145,8 +149,9 @@ fn step(params: &mut [f32], grads: &[f32]) {
 
 pub fn train(images: &[Image], labels: &[u8], seed: u64) -> MlpModel {
     validate_training_set(images, labels);
+    let num_classes = infer_num_classes(labels);
     let x = scale_images(images);
-    let mut model = init(seed);
+    let mut model = init(num_classes, seed);
     let mut rng = SplitMix64::new(seed ^ 0x5EED);
     let mut order: Vec<usize> = (0..images.len()).collect();
 

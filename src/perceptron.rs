@@ -9,8 +9,8 @@
 use serde::Serialize;
 
 use crate::image::{
-    argmax, cross_entropy, dot, scale, scale_images, softmax, validate_training_set, Image,
-    IMAGE_LEN, NUM_CLASSES,
+    argmax, cross_entropy, dot, infer_num_classes, scale, scale_images, softmax,
+    validate_training_set, Image, IMAGE_LEN,
 };
 use crate::rng::SplitMix64;
 
@@ -20,6 +20,7 @@ pub const BATCH_SIZE: usize = 32;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Hyperparams {
+    pub num_classes: u32,
     pub learning_rate: f32,
     pub epochs: u32,
     pub batch_size: u32,
@@ -27,7 +28,8 @@ pub struct Hyperparams {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PerceptronModel {
-    /// `NUM_CLASSES * IMAGE_LEN`, class-major.
+    pub num_classes: usize,
+    /// `num_classes * IMAGE_LEN`, class-major.
     pub weights: Vec<f32>,
     pub bias: Vec<f32>,
     /// Mean training loss after each epoch.
@@ -43,19 +45,22 @@ pub struct PerceptronEvidence {
 }
 
 fn logits(model: &PerceptronModel, x: &[f32]) -> Vec<f32> {
-    (0..NUM_CLASSES)
+    (0..model.num_classes)
         .map(|c| model.bias[c] + dot(&model.weights[c * IMAGE_LEN..(c + 1) * IMAGE_LEN], x))
         .collect()
 }
 
 pub fn train(images: &[Image], labels: &[u8], seed: u64) -> PerceptronModel {
     validate_training_set(images, labels);
+    let num_classes = infer_num_classes(labels);
     let x = scale_images(images);
     let mut model = PerceptronModel {
-        weights: vec![0.0; NUM_CLASSES * IMAGE_LEN],
-        bias: vec![0.0; NUM_CLASSES],
+        num_classes,
+        weights: vec![0.0; num_classes * IMAGE_LEN],
+        bias: vec![0.0; num_classes],
         loss_curve: Vec::with_capacity(EPOCHS as usize),
         hyperparams: Hyperparams {
+            num_classes: num_classes as u32,
             learning_rate: LEARNING_RATE,
             epochs: EPOCHS,
             batch_size: BATCH_SIZE as u32,
@@ -63,18 +68,18 @@ pub fn train(images: &[Image], labels: &[u8], seed: u64) -> PerceptronModel {
     };
     let mut rng = SplitMix64::new(seed);
     let mut order: Vec<usize> = (0..images.len()).collect();
-    let mut grad_w = vec![0.0f32; NUM_CLASSES * IMAGE_LEN];
+    let mut grad_w = vec![0.0f32; num_classes * IMAGE_LEN];
 
     for _ in 0..EPOCHS {
         rng.shuffle(&mut order);
         for batch in order.chunks(BATCH_SIZE) {
             grad_w.fill(0.0);
-            let mut grad_b = [0.0f32; NUM_CLASSES];
+            let mut grad_b = vec![0.0f32; num_classes];
             let inv_n = 1.0 / batch.len() as f32;
             for &n in batch {
                 let xn = &x[n * IMAGE_LEN..(n + 1) * IMAGE_LEN];
                 let p = softmax(&logits(&model, xn));
-                for c in 0..NUM_CLASSES {
+                for c in 0..num_classes {
                     let dz = (p[c] - if c == labels[n] as usize { 1.0 } else { 0.0 }) * inv_n;
                     grad_b[c] += dz;
                     for (g, &xi) in grad_w[c * IMAGE_LEN..(c + 1) * IMAGE_LEN]
@@ -88,7 +93,7 @@ pub fn train(images: &[Image], labels: &[u8], seed: u64) -> PerceptronModel {
             for (w, g) in model.weights.iter_mut().zip(&grad_w) {
                 *w -= LEARNING_RATE * g;
             }
-            for c in 0..NUM_CLASSES {
+            for c in 0..num_classes {
                 model.bias[c] -= LEARNING_RATE * grad_b[c];
             }
         }
