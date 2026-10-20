@@ -1,0 +1,38 @@
+{
+  "key": "ocr-livive-net",
+  "source": "http://127.0.0.1:55128/",
+  "captured_at": "2026-10-20T20:50:04.582Z",
+  "git": {
+    "sha": null,
+    "ref": null
+  },
+  "viewport": {
+    "width": 1280,
+    "height": 800
+  },
+  "duration_ms": 30633,
+  "video": "demo.webm",
+  "thumb": "thumb.webp",
+  "poster": "poster.webp",
+  "video_bytes": 1039004,
+  "encoded_with_ffmpeg": true,
+  "gallery": [
+    {
+      "label": "Four classifiers agree on a handwritten digit",
+      "src": "gallery/01-trained-consensus.png"
+    },
+    {
+      "label": "Inspect the MLP arithmetic",
+      "src": "gallery/02-mlp-arithmetic.png"
+    },
+    {
+      "label": "Learning curve and sample efficiency",
+      "src": "gallery/03-learning-curve.png"
+    },
+    {
+      "label": "Export the transparent ONNX graphs",
+      "src": "gallery/04-onnx-export.png"
+    }
+  ],
+  "console_errors": []
+}

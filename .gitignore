@@ -2,3 +2,7 @@ target/
 data/downloads/
 .DS_Store
 __pycache__/
+
+# Showcase recorder dependencies and assembled site
+node_modules/
+_site/

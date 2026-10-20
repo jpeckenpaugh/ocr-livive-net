@@ -382,7 +382,7 @@ function setupTrainingModal() {
     // Check if this model is already cached in IndexedDB
     const cached = await getCachedModel(state.datasetType, state.trainSize, state.fullTest);
     if (cached) {
-      applyModelPayload(cached);
+      applyModelPayload(cached, { retrain: true });
       $("#modal-training-setup").close();
       return;
     }
@@ -439,7 +439,7 @@ worker.onmessage = async ({ data }) => {
   }
 };
 
-async function applyModelPayload(data) {
+async function applyModelPayload(data, { retrain = false } = {}) {
   state.datasetType = data.datasetType;
   state.trainSize = data.trainSize;
   state.actualSamples = data.actualSamples || data.trainSize;
@@ -455,13 +455,17 @@ async function applyModelPayload(data) {
   pill.textContent = `Active: ${state.datasetType.toUpperCase()} (${state.actualSamples.toLocaleString()} samples) · Ready`;
   $("#active-profile-chip").textContent = `Profile: ${state.datasetType.toUpperCase()} · ${state.actualSamples.toLocaleString()} samples`;
 
-  // Ensure worker has loaded/instantiated models for prediction
-  worker.postMessage({
-    type: "retrain",
-    datasetType: state.datasetType,
-    size: state.trainSize,
-    fullTest: state.fullTest,
-  });
+  // Cached payloads arrive without live model instances in the worker, so
+  // rebuild them once. Fresh training already has models; retraining here
+  // caused an infinite train -> ready -> train loop (and a stuck status pill).
+  if (retrain) {
+    worker.postMessage({
+      type: "retrain",
+      datasetType: state.datasetType,
+      size: state.trainSize,
+      fullTest: state.fullTest,
+    });
+  }
 
   await loadTestPool();
   updateAccuracyChips();
@@ -788,7 +792,7 @@ async function boot() {
   // Check for cached model in IndexedDB
   const cached = await getLatestCachedModel();
   if (cached) {
-    applyModelPayload(cached);
+    applyModelPayload(cached, { retrain: true });
   } else {
     // No model cached yet: prompt user to configure and train
     const modal = $("#modal-training-setup");
