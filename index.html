@@ -23,15 +23,15 @@
 
   <!-- Global Status & Training Size Bar -->
   <aside class="global-bar">
-    <div id="status-pill" class="status-pill">Ready to train</div>
+    <div id="status-pill" class="status-pill">Checking cache…</div>
     <div class="controls-group">
       <button id="open-train-modal-btn" class="btn btn-primary" type="button">⚙ Change / Train Models</button>
-      <span id="active-profile-chip" class="meta" style="font-weight: 600;">Profile: Digits (0-9) · 10,000</span>
+      <span id="active-profile-chip" class="meta" style="font-weight: 600;">Profile: None</span>
     </div>
   </aside>
 
   <!-- TRAINING PROMPT & CONFIGURATION MODAL -->
-  <dialog id="modal-training-setup" class="method-modal" style="max-width: 620px;">
+  <dialog id="modal-training-setup" class="method-modal" style="max-width: 640px;">
     <div class="modal-inner">
       <div class="modal-header">
         <h2>Train OCR Classifiers</h2>
@@ -44,32 +44,32 @@
           <label class="panel" style="padding: 10px; cursor: pointer; display: block;">
             <input type="radio" name="dataset-choice" value="digits" checked>
             <b>Digits (0–9)</b>
-            <p class="meta" style="margin-top: 4px;">MNIST benchmark (10 classes). Instant training.</p>
+            <p class="meta" style="margin-top: 4px;">MNIST benchmark (10 classes).</p>
           </label>
           <label class="panel" style="padding: 10px; cursor: pointer; display: block;">
             <input type="radio" name="dataset-choice" value="letters">
             <b>Letters (A–Z)</b>
-            <p class="meta" style="margin-top: 4px;">EMNIST Letters (26 classes). Case-unified.</p>
+            <p class="meta" style="margin-top: 4px;">EMNIST Letters (26 classes).</p>
           </label>
           <label class="panel" style="padding: 10px; cursor: pointer; display: block;">
             <input type="radio" name="dataset-choice" value="alphanumeric">
             <b>Both (0–9, A–Z)</b>
-            <p class="meta" style="margin-top: 4px;">Combined (36 classes). Broader recognition.</p>
+            <p class="meta" style="margin-top: 4px;">Combined (36 classes).</p>
           </label>
         </div>
       </div>
 
       <div class="modal-section">
-        <h3>2. Training Samples &amp; Resource Warning</h3>
+        <h3>2. Training Samples &amp; Resource Estimations</h3>
         <div style="display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0;" id="size-options-container">
-          <button type="button" class="size-btn modal-size-btn" data-size="10">10 samples (~0.1s)</button>
-          <button type="button" class="size-btn modal-size-btn" data-size="100">100 samples (~0.2s)</button>
-          <button type="button" class="size-btn modal-size-btn" data-size="1000">1,000 samples (~0.5s)</button>
-          <button type="button" class="size-btn modal-size-btn active" data-size="10000">10,000 samples (~4s)</button>
-          <button type="button" class="size-btn modal-size-btn" data-size="60000" id="size-60k-btn">60,000 (Digits Only · ~25s)</button>
+          <button type="button" class="size-btn modal-size-btn" data-size="10" id="size-10-btn">10 samples</button>
+          <button type="button" class="size-btn modal-size-btn" data-size="100">100 samples</button>
+          <button type="button" class="size-btn modal-size-btn" data-size="1000">1,000 samples</button>
+          <button type="button" class="size-btn modal-size-btn active" data-size="10000">10,000 samples</button>
+          <button type="button" class="size-btn modal-size-btn" data-size="60000" id="size-60k-btn">60,000 (Digits Only)</button>
         </div>
         <p class="meta" id="time-warning-text" style="color: var(--accent); font-weight: 500;">
-          ⚡ Estimated training time: ~4 seconds in WebAssembly (MLP 64 units, 15 epochs, batch 32).
+          ⚡ Estimated training time: calculating…
         </p>
       </div>
 
@@ -92,7 +92,7 @@
       </div>
 
       <div class="row-actions" style="justify-content: flex-end; margin-top: 20px;">
-        <button type="button" class="btn close-modal-btn">Cancel</button>
+        <button type="button" class="btn close-modal-btn">Close</button>
         <button id="start-train-btn" class="btn btn-primary" type="button">Start In-Browser Training</button>
       </div>
     </div>

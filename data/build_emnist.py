@@ -145,3 +145,31 @@ def build_alphanumeric():
     print(f"Wrote test-alphanumeric-1000: {len(combo_test_lbl)} samples (36 classes)")
 
 build_alphanumeric()
+
+def build_smaller_alphanumeric():
+    d100_img = (DATA / "train-100.u8").read_bytes()
+    d100_lbl = (DATA / "train-100-labels.u8").read_bytes()
+    l100_img = (DATA / "train-letters-100.u8").read_bytes()
+    l100_lbl = (DATA / "train-letters-100-labels.u8").read_bytes()
+
+    combo100_i = bytearray(d100_img)
+    combo100_l = bytearray(d100_lbl)
+    combo100_i.extend(l100_img)
+    for l in l100_lbl: combo100_l.append(l + 10)
+    (DATA / "train-alphanumeric-100.u8").write_bytes(combo100_i)
+    (DATA / "train-alphanumeric-100-labels.u8").write_bytes(combo100_l)
+
+    d1k_img = (DATA / "train-1000.u8").read_bytes()
+    d1k_lbl = (DATA / "train-1000-labels.u8").read_bytes()
+    l1k_img = (DATA / "train-letters-1000.u8").read_bytes()
+    l1k_lbl = (DATA / "train-letters-1000-labels.u8").read_bytes()
+
+    combo1k_i = bytearray(d1k_img)
+    combo1k_l = bytearray(d1k_lbl)
+    combo1k_i.extend(l1k_img)
+    for l in l1k_lbl: combo1k_l.append(l + 10)
+    (DATA / "train-alphanumeric-1000.u8").write_bytes(combo1k_i)
+    (DATA / "train-alphanumeric-1000-labels.u8").write_bytes(combo1k_l)
+    print("Wrote alphanumeric-100 and alphanumeric-1000")
+
+build_smaller_alphanumeric()

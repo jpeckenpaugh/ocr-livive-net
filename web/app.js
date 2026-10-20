@@ -1,4 +1,5 @@
 import init, { preprocess } from "../pkg/ocr.js";
+import { getCachedModel, saveCachedModel, getLatestCachedModel } from "./db.js";
 
 const SIDE = 28;
 const LEN = SIDE * SIDE;
@@ -10,6 +11,7 @@ const state = {
   activeTab: "playground",
   datasetType: "digits", // 'digits' | 'letters' | 'alphanumeric'
   trainSize: 10000,
+  actualSamples: 10000,
   fullTest: false,
   numClasses: 10,
   testImages: null,
@@ -276,25 +278,34 @@ function setupTrainingModal() {
   const modal = $("#modal-training-setup");
   $("#open-train-modal-btn").onclick = () => modal.showModal();
 
-  // Dataset radio changes
   $$("input[name='dataset-choice']").forEach((radio) => {
     radio.onchange = () => {
       const choice = radio.value;
+      const size10 = $("#size-10-btn");
       const size60k = $("#size-60k-btn");
+
       if (choice === "digits") {
+        size10.style.display = "inline-block";
         size60k.style.display = "inline-block";
-      } else {
+      } else if (choice === "letters") {
+        size10.style.display = "none";
         size60k.style.display = "none";
-        if (state.trainSize === 60000) {
+        if (state.trainSize === 10 || state.trainSize === 60000) {
           state.trainSize = 10000;
-          $$(".modal-size-btn").forEach(b => b.classList.toggle("active", b.dataset.size === "10000"));
+        }
+      } else {
+        // Alphanumeric
+        size10.style.display = "none";
+        size60k.style.display = "none";
+        if (state.trainSize === 10 || state.trainSize === 60000) {
+          state.trainSize = 10000;
         }
       }
+      updateModalSizeButtonLabels();
       updateWarningText();
     };
   });
 
-  // Size buttons in modal
   $$(".modal-size-btn").forEach((btn) => {
     btn.onclick = () => {
       $$(".modal-size-btn").forEach(b => b.classList.remove("active"));
@@ -304,23 +315,77 @@ function setupTrainingModal() {
     };
   });
 
+  function updateModalSizeButtonLabels() {
+    const choice = $('input[name="dataset-choice"]:checked').value;
+    $$(".modal-size-btn").forEach((btn) => {
+      const sz = Number(btn.dataset.size);
+      btn.classList.toggle("active", sz === state.trainSize);
+      if (sz === 100) {
+        btn.textContent = choice === "alphanumeric" ? "100/digit+letter (~200 samples)" : "100 samples";
+      } else if (sz === 1000) {
+        btn.textContent = choice === "alphanumeric" ? "1,000/class (~2,000 samples)" : "1,000 samples";
+      } else if (sz === 10000) {
+        btn.textContent = choice === "alphanumeric" ? "10k/class (~20,000 samples)" : "10,000 samples";
+      }
+    });
+  }
+
   function updateWarningText() {
     const choice = $('input[name="dataset-choice"]:checked').value;
     const sz = state.trainSize;
+    let sampleDesc = `${sz} samples`;
     let est = "~4 seconds";
-    if (sz === 10) est = "< 0.1s";
-    else if (sz === 100) est = "~0.2s";
-    else if (sz === 1000) est = "~0.5s";
-    else if (sz === 60000) est = "~25 seconds (may warm CPU)";
 
-    $("#time-warning-text").textContent = `⚡ Training on ${sz} samples (${choice}): estimated time ${est}.`;
+    if (choice === "alphanumeric") {
+      if (sz === 100) {
+        sampleDesc = "198 samples (36 classes)";
+        est = "~0.4 seconds";
+      } else if (sz === 1000) {
+        sampleDesc = "1,988 samples (36 classes)";
+        est = "~2.5 seconds";
+      } else {
+        sampleDesc = "19,984 samples (36 classes: 0-9 & A-Z)";
+        est = "~26 seconds (MLP + Perceptron SGD across 36 classes)";
+      }
+    } else if (choice === "letters") {
+      if (sz === 100) {
+        sampleDesc = "104 samples (26 letters)";
+        est = "~0.2 seconds";
+      } else if (sz === 1000) {
+        sampleDesc = "988 samples (26 letters)";
+        est = "~0.8 seconds";
+      } else {
+        sampleDesc = "9,984 samples (26 letters)";
+        est = "~4.5 seconds";
+      }
+    } else {
+      // Digits
+      if (sz === 10) est = "< 0.1s";
+      else if (sz === 100) est = "~0.2s";
+      else if (sz === 1000) est = "~0.5s";
+      else if (sz === 10000) est = "~4 seconds";
+      else if (sz === 60000) est = "~25 seconds";
+    }
+
+    $("#time-warning-text").textContent = `⚡ Training ${sampleDesc}: estimated time ${est}.`;
   }
+
+  updateModalSizeButtonLabels();
+  updateWarningText();
 
   $("#start-train-btn").onclick = async () => {
     const choice = $('input[name="dataset-choice"]:checked').value;
     const fullTest = $("#modal-full-test-check").checked;
     state.datasetType = choice;
     state.fullTest = fullTest;
+
+    // Check if this model is already cached in IndexedDB
+    const cached = await getCachedModel(state.datasetType, state.trainSize, state.fullTest);
+    if (cached) {
+      applyModelPayload(cached);
+      $("#modal-training-setup").close();
+      return;
+    }
 
     $("#train-progress-block").style.display = "block";
     $("#start-train-btn").disabled = true;
@@ -349,31 +414,60 @@ worker.onmessage = async ({ data }) => {
     $("#train-progress-block").style.display = "none";
     $("#start-train-btn").disabled = false;
   } else if (data.type === "ready") {
-    pill.className = "status-pill ready";
-    pill.textContent = `Trained on ${data.trainSize} samples · Ready`;
-    state.numClasses = data.numClasses;
-    state.modelData = data.modelData;
-    state.accuracy = data.accuracy;
-    state.trainMs = data.trainMs;
-    state.confusion = data.confusion;
-    state.disagreements = data.disagreements;
+    // Save to IndexedDB cache
+    await saveCachedModel(data.datasetType, data.trainSize, state.fullTest, {
+      datasetType: data.datasetType,
+      trainSize: data.trainSize,
+      numClasses: data.numClasses,
+      actualSamples: data.actualSamples,
+      modelData: data.modelData,
+      accuracy: data.accuracy,
+      trainMs: data.trainMs,
+      confusion: data.confusion,
+      disagreements: data.disagreements,
+      testCount: data.testCount,
+    });
 
-    $("#active-profile-chip").textContent = `Profile: ${state.datasetType.toUpperCase()} · ${data.trainSize} samples`;
+    applyModelPayload(data);
     $("#train-progress-block").style.display = "none";
     $("#start-train-btn").disabled = false;
     $("#modal-training-setup").close();
-
-    // Reload test pool for the active dataset
-    await loadTestPool();
-    updateAccuracyChips();
-    setInputImage(state.currentImage);
-    if (state.activeTab === "experiments") renderCharts();
   } else if (data.type === "prediction" && data.id === state.requestId) {
     renderPredictionResults(data.results);
   } else if (data.type === "onnx_exported") {
     downloadBlob(data.bytes, `${data.method}_${state.datasetType}.onnx`);
   }
 };
+
+async function applyModelPayload(data) {
+  state.datasetType = data.datasetType;
+  state.trainSize = data.trainSize;
+  state.actualSamples = data.actualSamples || data.trainSize;
+  state.numClasses = data.numClasses;
+  state.modelData = data.modelData;
+  state.accuracy = data.accuracy;
+  state.trainMs = data.trainMs;
+  state.confusion = data.confusion;
+  state.disagreements = data.disagreements;
+
+  const pill = $("#status-pill");
+  pill.className = "status-pill ready";
+  pill.textContent = `Active: ${state.datasetType.toUpperCase()} (${state.actualSamples.toLocaleString()} samples) · Ready`;
+  $("#active-profile-chip").textContent = `Profile: ${state.datasetType.toUpperCase()} · ${state.actualSamples.toLocaleString()} samples`;
+
+  // Ensure worker has loaded/instantiated models for prediction
+  worker.postMessage({
+    type: "retrain",
+    datasetType: state.datasetType,
+    size: state.trainSize,
+    fullTest: state.fullTest,
+  });
+
+  await loadTestPool();
+  updateAccuracyChips();
+  setInputImage(state.currentImage);
+  if (state.activeTab === "experiments") renderCharts();
+}
 
 async function loadTestPool() {
   let imgPath, lblPath;
@@ -395,7 +489,7 @@ async function loadTestPool() {
   state.testImages = new Uint8Array(tImgs);
   state.testLabels = new Uint8Array(tLbls);
 
-  $("#test-pool-meta").textContent = `${state.testLabels.length} test samples`;
+  $("#test-pool-meta").textContent = `${state.testLabels.length.toLocaleString()} test samples`;
   $("#test-index-input").max = state.testLabels.length - 1;
   loadTestIndex(0);
 }
@@ -423,7 +517,6 @@ function renderPredictionResults(res) {
   $("#pred-centroid").textContent = classLabel(res.centroid.prediction);
   const meansStrip = $("#means-strip");
   meansStrip.innerHTML = "";
-  // Show top 10 relevant means or all if <= 10
   const maxMeans = Math.min(10, state.numClasses);
   for (let k = 0; k < maxMeans; k++) {
     const fig = document.createElement("figure");
@@ -492,7 +585,6 @@ function renderPredictionResults(res) {
 
 function renderBars(container, probs, pred) {
   container.innerHTML = "";
-  // Show top 6 candidates if many classes
   const indexed = probs.map((p, idx) => ({ p, idx }));
   indexed.sort((a, b) => b.p - a.p);
   const topList = indexed.slice(0, 8);
@@ -678,7 +770,7 @@ function downloadBlob(bytes, filename) {
   URL.revokeObjectURL(url);
 }
 
-// Initial Boot: does NOT auto-train; initializes WASM and shows training modal
+// Initial Boot: Checks IndexedDB cache first. If a model was already trained, loads it immediately!
 async function boot() {
   await init();
   worker.postMessage({ type: "init_wasm" });
@@ -691,12 +783,17 @@ async function boot() {
   setupModals();
   setupOnnx();
 
-  // Load baseline JSON
   state.baselineData = await fetch("data/baseline.json").then(r => r.json());
 
-  // Show training setup modal to let user choose configuration
-  const modal = $("#modal-training-setup");
-  modal.showModal();
+  // Check for cached model in IndexedDB
+  const cached = await getLatestCachedModel();
+  if (cached) {
+    applyModelPayload(cached);
+  } else {
+    // No model cached yet: prompt user to configure and train
+    const modal = $("#modal-training-setup");
+    modal.showModal();
+  }
 }
 
 boot().catch((err) => {

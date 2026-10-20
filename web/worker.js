@@ -33,8 +33,8 @@ async function loadDataset(datasetType, size) {
     lblPath = `../data/train-letters-${size}-labels.u8`;
   } else {
     // Alphanumeric
-    imgPath = `../data/train-alphanumeric-10000.u8`;
-    lblPath = `../data/train-alphanumeric-10000-labels.u8`;
+    imgPath = `../data/train-alphanumeric-${size}.u8`;
+    lblPath = `../data/train-alphanumeric-${size}-labels.u8`;
   }
 
   const [images, labels] = await Promise.all([
@@ -145,6 +145,7 @@ async function retrain(datasetType, size, fullTest = false) {
     datasetType,
     trainSize: size,
     numClasses,
+    actualSamples: trainData.labels.length,
     modelData,
     accuracy,
     trainMs,
