@@ -1,0 +1,32 @@
+{
+  "10": {
+    "centroid": 62.0,
+    "knn": 68.5,
+    "perceptron": 64.0,
+    "mlp": 65.0
+  },
+  "100": {
+    "centroid": 71.5,
+    "knn": 82.0,
+    "perceptron": 78.5,
+    "mlp": 81.0
+  },
+  "1000": {
+    "centroid": 75.8,
+    "knn": 88.6,
+    "perceptron": 85.2,
+    "mlp": 89.1
+  },
+  "10000": {
+    "centroid": 77.3,
+    "knn": 92.2,
+    "perceptron": 88.1,
+    "mlp": 92.7
+  },
+  "60000": {
+    "centroid": 82.0,
+    "knn": 95.5,
+    "perceptron": 92.4,
+    "mlp": 96.2
+  }
+}

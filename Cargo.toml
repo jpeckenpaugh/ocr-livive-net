@@ -1,0 +1,21 @@
+[package]
+name = "ocr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+description = "Four hand-written digit classifiers on 28x28 MNIST, compiled to WebAssembly"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# JS boundary only. No ML, tensor, or autograd crates.
+wasm-bindgen = "=0.2.129"
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

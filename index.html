@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ocr · four transparent classifiers in WebAssembly</title>
+  <link rel="stylesheet" href="web/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">
+      <h1 class="brand-title">ocr.livive.net</h1>
+      <p class="brand-sub">Browser-native OCR from scratch in WebAssembly · Zero ML crates</p>
+    </div>
+    <nav class="main-nav">
+      <a href="#/" class="nav-link active" data-tab="playground">Playground</a>
+      <a href="#/experiments" class="nav-link" data-tab="experiments">Training &amp; Analytics</a>
+      <a href="#/background" class="nav-link" data-tab="background">Background</a>
+      <a href="#/code" class="nav-link" data-tab="code">Rust Code</a>
+      <a href="#/export" class="nav-link" data-tab="export">ONNX Export</a>
+    </nav>
+  </header>
+
+  <!-- Global Status & Training Size Bar -->
+  <aside class="global-bar">
+    <div id="status-pill" class="status-pill">Loading models…</div>
+    <div class="controls-group">
+      <div class="size-selector">
+        <span class="meta">Training Samples:</span>
+        <button type="button" class="size-btn" data-size="10">10</button>
+        <button type="button" class="size-btn" data-size="100">100</button>
+        <button type="button" class="size-btn" data-size="1000">1,000</button>
+        <button type="button" class="size-btn active" data-size="10000">10,000</button>
+        <button type="button" class="size-btn" data-size="60000">60,000 (Full)</button>
+      </div>
+      <label class="checkbox-label" title="Full 10,000 test set takes longer to score">
+        <input type="checkbox" id="full-test-check">
+        <span>Test 10k (slower)</span>
+      </label>
+    </div>
+  </aside>
+
+  <!-- VIEW 1: PLAYGROUND -->
+  <main id="tab-playground" class="tab-view active">
+    <section class="input-grid-layout">
+      <!-- Draw input -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>1. Draw a Digit</h2>
+          <span class="meta">Auto-centered</span>
+        </div>
+        <canvas id="draw-canvas" width="280" height="280"></canvas>
+        <div class="row-actions">
+          <button id="clear-draw-btn" class="btn" type="button">Clear Canvas</button>
+        </div>
+      </div>
+
+      <!-- Pick test sample -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>2. Or Test Sample</h2>
+          <span class="meta">MNIST test set</span>
+        </div>
+        <div class="row-actions">
+          <button id="prev-test-btn" class="btn" type="button">← Prev</button>
+          <input id="test-index-input" type="number" min="0" max="999" value="0" style="width: 70px; padding: 4px;">
+          <button id="next-test-btn" class="btn" type="button">Next →</button>
+          <button id="random-test-btn" class="btn" type="button">Random</button>
+        </div>
+        <p id="test-sample-meta" class="meta" style="margin-top: 14px;">Index #0 · True label: ?</p>
+      </div>
+
+      <!-- Preprocessed input -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>3. Preprocessed (28×28)</h2>
+          <span class="meta">784 bytes</span>
+        </div>
+        <canvas id="input-grid-canvas" width="280" height="280"></canvas>
+        <p id="grid-inspect-readout" class="meta" style="margin-top: 10px;">Hover pixel to view coordinate &amp; value.</p>
+      </div>
+    </section>
+
+    <!-- Consensus -->
+    <div id="consensus-banner" class="consensus-banner">
+      <span id="consensus-text">Evaluating…</span>
+      <span id="consensus-meta" class="meta">Majority vote among all 4 methods</span>
+    </div>
+
+    <!-- 4 Classifiers -->
+    <section class="methods-grid-layout">
+      <!-- Centroid -->
+      <article class="panel method-card" id="card-centroid">
+        <div>
+          <div class="method-head">
+            <span class="method-title">Centroid</span>
+            <span class="method-acc" id="acc-centroid">—%</span>
+          </div>
+          <div class="method-pred" id="pred-centroid">—</div>
+          <p class="meta">Class mean Euclidean distances. Lowest wins.</p>
+          <div class="thumb-strip" id="means-strip"></div>
+        </div>
+        <div class="card-footer">
+          <span class="meta">O(10 · 784)</span>
+          <button class="modal-trigger-btn" data-modal="centroid" type="button">Inspect Arithmetic →</button>
+        </div>
+      </article>
+
+      <!-- k-NN -->
+      <article class="panel method-card" id="card-knn">
+        <div>
+          <div class="method-head">
+            <span class="method-title">k-NN (k=3)</span>
+            <span class="method-acc" id="acc-knn">—%</span>
+          </div>
+          <div class="method-pred" id="pred-knn">—</div>
+          <p class="meta">Nearest training images vote.</p>
+          <div class="thumb-strip" id="knn-strip"></div>
+        </div>
+        <div class="card-footer">
+          <span class="meta">O(N · 784)</span>
+          <button class="modal-trigger-btn" data-modal="knn" type="button">Inspect Arithmetic →</button>
+        </div>
+      </article>
+
+      <!-- Perceptron -->
+      <article class="panel method-card" id="card-perceptron">
+        <div>
+          <div class="method-head">
+            <span class="method-title">Perceptron</span>
+            <span class="method-acc" id="acc-perceptron">—%</span>
+          </div>
+          <div class="method-pred" id="pred-perceptron">—</div>
+          <p class="meta">10×784 weights + softmax.</p>
+          <div class="bars-container" id="bars-perceptron"></div>
+          <div style="margin-top: 10px; display: flex; gap: 10px; align-items: center;">
+            <canvas id="perceptron-heatmap" width="70" height="70" style="border: 1px solid var(--line);"></canvas>
+            <span class="meta" style="font-size: 11px;">Active weight heatmap<br>(orange +, blue −)</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="meta">Linear decision</span>
+          <button class="modal-trigger-btn" data-modal="perceptron" type="button">Inspect Arithmetic →</button>
+        </div>
+      </article>
+
+      <!-- MLP -->
+      <article class="panel method-card" id="card-mlp">
+        <div>
+          <div class="method-head">
+            <span class="method-title">MLP (784→32→10)</span>
+            <span class="method-acc" id="acc-mlp">—%</span>
+          </div>
+          <div class="method-pred" id="pred-mlp">—</div>
+          <p class="meta">Hidden ReLU layer + backpropagation.</p>
+          <div class="bars-container" id="bars-mlp"></div>
+          <p class="meta" style="margin-top: 8px;">Hidden unit activations:</p>
+          <div id="mlp-hidden-activations" style="display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px;"></div>
+        </div>
+        <div class="card-footer">
+          <span class="meta">Non-linear</span>
+          <button class="modal-trigger-btn" data-modal="mlp" type="button">Inspect Arithmetic →</button>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <!-- VIEW 2: TRAINING & ANALYTICS -->
+  <section id="tab-experiments" class="tab-view">
+    <div class="panel" style="margin-bottom: 20px;">
+      <h2>Learning Curve: Sample Efficiency (10 to 60,000)</h2>
+      <p class="meta">Test accuracy across orders of magnitude of training data. Centroid flattens early; MLP and k-NN scale with data.</p>
+      <div id="learning-curve-container" class="chart-container">
+        <canvas id="learning-curve-chart" width="1000" height="240"></canvas>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom: 20px;">
+      <h2>Confusion Matrix (Current Trained Set)</h2>
+      <p class="meta">Rows: True label. Columns: Predicted label. Diagonal elements represent correct classifications.</p>
+      <div style="overflow-x: auto;">
+        <table id="confusion-table" class="confusion-matrix-table"></table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Disagreement &amp; Hard Cases Gallery</h2>
+      <p class="meta">Samples from the test set where classifiers disagree or failed.</p>
+      <div id="disagreements-gallery" style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px;"></div>
+    </div>
+  </section>
+
+  <!-- VIEW 3: BACKGROUND -->
+  <section id="tab-background" class="tab-view">
+    <article class="panel" style="line-height: 1.7; max-width: 860px; margin: 0 auto;">
+      <h2 style="font-size: 20px;">Why Browser-Native OCR From Scratch?</h2>
+      <p>Modern machine learning is often wrapped inside gigabytes of framework runtimes (PyTorch, TensorFlow, libtorch) and hidden behind autograd engines. This project demonstrates that character recognition on real-world handwritten digits can be executed <strong>from first principles</strong> in clean Rust, compiled directly to <strong>WebAssembly</strong>, and audited by hand with paper and pencil.</p>
+      
+      <h3 style="margin-top: 24px;">The Dataset: MNIST</h3>
+      <p>The <strong>MNIST database</strong> (Modified National Institute of Standards and Technology) is the gold standard benchmark in pattern recognition. Originally assembled by Yann LeCun, Corinna Cortes, and Christopher Burges, it consists of 70,000 28×28 grayscale images of handwritten digits extracted from Census Bureau employees and high school students.</p>
+
+      <h3 style="margin-top: 24px;">The Pipeline: 28×28 Normalization</h3>
+      <p>When you draw on the canvas above, it executes the identical preprocessing pipeline designed for MNIST:</p>
+      <ol>
+        <li><strong>Grayscale conversion</strong> via integer arithmetic: <code>(299·R + 587·G + 114·B + 500) / 1000</code>.</li>
+        <li><strong>Bounding-box extraction</strong> of ink pixels, expanded symmetrically into a square.</li>
+        <li><strong>Box-filter resampling</strong> to a 20×20 bounding box with half-up rounding.</li>
+        <li><strong>Center of mass translation</strong> positioning the centroid of ink at coordinates (14, 14) within the 28×28 canvas.</li>
+      </ol>
+
+      <h3 style="margin-top: 24px;">The Progression of Transparency</h3>
+      <ul>
+        <li><strong>Centroid</strong> (Average): The most naive model. Averages each digit class into a single prototype image. Unconditional baseline.</li>
+        <li><strong>k-NN</strong> (Memorize): The model <em>is</em> the dataset. No parameters; pure geometric neighborhood comparison.</li>
+        <li><strong>Perceptron</strong> (Linear separation): A single affine hyperplane per class. Visualizable as a spatial weight template.</li>
+        <li><strong>MLP</strong> (Non-linear representation): Adds a hidden layer with ReLU activation. Capable of learning stroke combinations and curvature.</li>
+      </ul>
+    </article>
+  </section>
+
+  <!-- VIEW 4: RUST CODE & RATIONALE -->
+  <section id="tab-code" class="tab-view">
+    <div class="code-container">
+      <nav class="code-nav">
+        <button type="button" class="code-file-btn active" data-file="centroid">centroid.rs</button>
+        <button type="button" class="code-file-btn" data-file="knn">knn.rs</button>
+        <button type="button" class="code-file-btn" data-file="perceptron">perceptron.rs</button>
+        <button type="button" class="code-file-btn" data-file="mlp">mlp.rs</button>
+        <button type="button" class="code-file-btn" data-file="preprocess">preprocess.rs</button>
+        <button type="button" class="code-file-btn" data-file="onnx">onnx.rs</button>
+      </nav>
+      <div class="code-body">
+        <div id="code-rationale" class="meta" style="margin-bottom: 12px; font-size: 13px;"></div>
+        <pre class="rust-code"><code id="code-display">Select a file to inspect.</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- VIEW 5: ONNX EXPORT -->
+  <section id="tab-export" class="tab-view">
+    <div class="panel" style="max-width: 900px; margin: 0 auto;">
+      <h2>Zero-Dependency ONNX Serializer</h2>
+      <p class="meta">Export any of your in-browser trained models to standard Open Neural Network Exchange (.onnx) format. Built entirely from scratch with a custom Protobuf wire writer in Rust.</p>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 20px 0;">
+        <div class="export-card">
+          <h3>Centroid</h3>
+          <p class="meta">Sub + Mul + ReduceSum + Sqrt</p>
+          <button class="btn btn-primary onnx-dl-btn" data-method="centroid" type="button">Download centroid.onnx</button>
+        </div>
+        <div class="export-card">
+          <h3>k-NN (k=3)</h3>
+          <p class="meta">TopK on Euclidean distance</p>
+          <button class="btn btn-primary onnx-dl-btn" data-method="knn" type="button">Download knn.onnx</button>
+        </div>
+        <div class="export-card">
+          <h3>Perceptron</h3>
+          <p class="meta">Div(255) + Gemm + Softmax</p>
+          <button class="btn btn-primary onnx-dl-btn" data-method="perceptron" type="button">Download perceptron.onnx</button>
+        </div>
+        <div class="export-card">
+          <h3>MLP</h3>
+          <p class="meta">Gemm + Relu + Gemm + Softmax</p>
+          <button class="btn btn-primary onnx-dl-btn" data-method="mlp" type="button">Download mlp.onnx</button>
+        </div>
+      </div>
+
+      <h3>How to Run in Python (onnxruntime)</h3>
+      <pre class="code-snippet"><code>import onnxruntime as ort
+import numpy as np
+
+# Load model
+session = ort.InferenceSession("mlp.onnx")
+
+# Query shape: [1, 784] float32 pixels in range 0..255
+dummy_input = np.zeros((1, 784), dtype=np.float32)
+outputs = session.run(None, {"input_pixels": dummy_input})
+
+probabilities = outputs[0]  # shape: [1, 10]
+predicted_digit = np.argmax(probabilities)
+print("Predicted digit:", predicted_digit)</code></pre>
+
+      <h3 style="margin-top: 20px;">Inspect with Netron</h3>
+      <p class="meta">You can open any of the exported files in <a href="https://netron.app" target="_blank" rel="noopener">Netron.app</a> to visually explore the computational graph, node attributes, tensor shapes, and initializers.</p>
+    </div>
+  </section>
+
+  <!-- METHOD MODALS -->
+  <dialog id="modal-centroid" class="method-modal">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h2>Centroid Classifier Details</h2>
+        <button type="button" class="close-modal-btn">✕</button>
+      </div>
+      <div class="modal-section">
+        <h3>Intuition &amp; Model Architecture</h3>
+        <p>The centroid classifier computes the arithmetic mean image for each of the 10 digit classes. At inference time, it computes the Euclidean distance between the unknown image and each of the 10 prototype images.</p>
+        <div class="math-box">d_c = √( Σ (x_i - μ_{c,i})² )<br>prediction = argmin_c(d_c)</div>
+      </div>
+      <div class="modal-section">
+        <h3>Why it fails</h3>
+        <p>A single mean cannot represent multimodal digit styles (e.g., a "7" with a European crossbar vs. an American plain "7"). Taking the mean blurs contradictory features together.</p>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="modal-knn" class="method-modal">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h2>k-Nearest Neighbors (k=3) Details</h2>
+        <button type="button" class="close-modal-btn">✕</button>
+      </div>
+      <div class="modal-section">
+        <h3>Intuition</h3>
+        <p>k-NN has zero training time: the model is literally the dataset. For an input image, it searches through all N training samples, identifies the 3 closest images under Euclidean distance, and awards the prediction to the majority vote.</p>
+        <div class="math-box">D(x, y) = √( Σ (x_i - y_i)² )<br>prediction = majority_vote(top_k(D))</div>
+      </div>
+      <div class="modal-section">
+        <h3>Resource Tradeoff</h3>
+        <p>Fast to train (instant copy), but inference cost scales linearly as O(N · 784). For 60,000 samples, every single prediction requires calculating 47 million pixel subtractions!</p>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="modal-perceptron" class="method-modal">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h2>Multiclass Perceptron Details</h2>
+        <button type="button" class="close-modal-btn">✕</button>
+      </div>
+      <div class="modal-section">
+        <h3>Intuition &amp; Math</h3>
+        <p>A single linear layer mapping 784 inputs directly to 10 class logits, followed by numerically stable Softmax normalization.</p>
+        <div class="math-box">z_c = b_c + Σ w_{c,i} · (x_i / 255)<br>p_c = exp(z_c - max(z)) / Σ exp(z_j - max(z))<br>Loss = -log(p_{true})</div>
+      </div>
+      <div class="modal-section">
+        <h3>Weight Interpretation</h3>
+        <p>Each digit class has a 28×28 weight template. Positive weights (orange) reward ink in expected stroke locations; negative weights (blue) penalize ink in areas that would distinguish it from other digits (e.g. ink across the center loop of an 8).</p>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="modal-mlp" class="method-modal">
+    <div class="modal-inner">
+      <div class="modal-header">
+        <h2>Multi-Layer Perceptron (ReLU) Details</h2>
+        <button type="button" class="close-modal-btn">✕</button>
+      </div>
+      <div class="modal-section">
+        <h3>Network Architecture</h3>
+        <p>784 input units → 32 hidden units with Rectified Linear Unit (ReLU) activation → 10 output units with Softmax. Trained via hand-written backpropagation with mini-batch SGD.</p>
+        <div class="math-box">h = max(0, W_1 · x + b_1)<br>logits = W_2 · h + b_2<br>∂L/∂logits = p - y<br>∂L/∂W_1 = ((∂L/∂logits · W_2) ⊙ [h > 0]) ⊗ x</div>
+      </div>
+      <div class="modal-section">
+        <h3>Why ReLU?</h3>
+        <p>Unlike Sigmoid (which saturates and slows gradients down), ReLU preserves strong gradient signals for active hidden features, converging much faster and reaching ~93% to 96% accuracy with just 32 units.</p>
+      </div>
+    </div>
+  </dialog>
+
+  <script type="module" src="web/app.js"></script>
+</body>
+</html>
