@@ -69,7 +69,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site/data
-          cp index.html CNAME _site/
+          cp index.html CNAME favicon.ico _site/
           cp -r web pkg _site/
           cp data/*.u8 data/*.json _site/data/
 
