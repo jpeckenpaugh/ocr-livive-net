@@ -179,15 +179,33 @@ pub fn export_perceptron(model: &PerceptronModel) -> Vec<u8> {
 
     graph.write_msg_field(
         1,
-        make_node("Div", &["input_pixels", "scale_255"], &["scaled_input"], "norm_div", &[]),
+        make_node(
+            "Div",
+            &["input_pixels", "scale_255"],
+            &["scaled_input"],
+            "norm_div",
+            &[],
+        ),
     );
     graph.write_msg_field(
         1,
-        make_node("Gemm", &["scaled_input", "weights", "bias"], &["logits"], "dense_layer", &[("transB", 1)]),
+        make_node(
+            "Gemm",
+            &["scaled_input", "weights", "bias"],
+            &["logits"],
+            "dense_layer",
+            &[("transB", 1)],
+        ),
     );
     graph.write_msg_field(
         1,
-        make_node("Softmax", &["logits"], &["probabilities"], "prob_softmax", &[("axis", 1)]),
+        make_node(
+            "Softmax",
+            &["logits"],
+            &["probabilities"],
+            "prob_softmax",
+            &[("axis", 1)],
+        ),
     );
 
     build_model_proto(graph, "ocr-livive-net-perceptron")
@@ -225,20 +243,44 @@ pub fn export_mlp(model: &MlpModel) -> Vec<u8> {
 
     graph.write_msg_field(
         1,
-        make_node("Div", &["input_pixels", "scale_255"], &["scaled_input"], "norm", &[]),
+        make_node(
+            "Div",
+            &["input_pixels", "scale_255"],
+            &["scaled_input"],
+            "norm",
+            &[],
+        ),
     );
     graph.write_msg_field(
         1,
-        make_node("Gemm", &["scaled_input", "w1", "b1"], &["z1"], "dense1", &[("transB", 1)]),
+        make_node(
+            "Gemm",
+            &["scaled_input", "w1", "b1"],
+            &["z1"],
+            "dense1",
+            &[("transB", 1)],
+        ),
     );
     graph.write_msg_field(1, make_node("Relu", &["z1"], &["a1"], "relu", &[]));
     graph.write_msg_field(
         1,
-        make_node("Gemm", &["a1", "w2", "b2"], &["logits"], "dense2", &[("transB", 1)]),
+        make_node(
+            "Gemm",
+            &["a1", "w2", "b2"],
+            &["logits"],
+            "dense2",
+            &[("transB", 1)],
+        ),
     );
     graph.write_msg_field(
         1,
-        make_node("Softmax", &["logits"], &["probabilities"], "softmax", &[("axis", 1)]),
+        make_node(
+            "Softmax",
+            &["logits"],
+            &["probabilities"],
+            "softmax",
+            &[("axis", 1)],
+        ),
     );
 
     build_model_proto(graph, "ocr-livive-net-mlp")
@@ -265,7 +307,13 @@ pub fn export_centroid(model: &CentroidModel) -> Vec<u8> {
 
     graph.write_msg_field(
         1,
-        make_node("Sub", &["input_pixels", "means"], &["diff"], "sub_means", &[]),
+        make_node(
+            "Sub",
+            &["input_pixels", "means"],
+            &["diff"],
+            "sub_means",
+            &[],
+        ),
     );
     graph.write_msg_field(
         1,
@@ -273,7 +321,13 @@ pub fn export_centroid(model: &CentroidModel) -> Vec<u8> {
     );
     graph.write_msg_field(
         1,
-        make_node("ReduceSum", &["sq_diff"], &["sum_sq"], "sum_axes", &[("keepdims", 1)]),
+        make_node(
+            "ReduceSum",
+            &["sq_diff"],
+            &["sum_sq"],
+            "sum_axes",
+            &[("keepdims", 1)],
+        ),
     );
     graph.write_msg_field(
         1,
@@ -285,7 +339,10 @@ pub fn export_centroid(model: &CentroidModel) -> Vec<u8> {
 
 pub fn export_knn(model: &KnnModel) -> Vec<u8> {
     let n = model.labels.len();
-    assert!(n <= 10_000, "k-NN ONNX export is supported up to 10,000 samples");
+    assert!(
+        n <= 10_000,
+        "k-NN ONNX export is supported up to 10,000 samples"
+    );
 
     let mut graph = ProtoWriter::new();
     graph.write_string_field(2, "knn_classifier");
@@ -310,7 +367,13 @@ pub fn export_knn(model: &KnnModel) -> Vec<u8> {
 
     graph.write_msg_field(
         1,
-        make_node("Sub", &["input_pixels", "train_images"], &["diff"], "diff_node", &[]),
+        make_node(
+            "Sub",
+            &["input_pixels", "train_images"],
+            &["diff"],
+            "diff_node",
+            &[],
+        ),
     );
     graph.write_msg_field(
         1,
@@ -318,7 +381,13 @@ pub fn export_knn(model: &KnnModel) -> Vec<u8> {
     );
     graph.write_msg_field(
         1,
-        make_node("ReduceSum", &["sq"], &["dist_sq"], "reduce_node", &[("keepdims", 0)]),
+        make_node(
+            "ReduceSum",
+            &["sq"],
+            &["dist_sq"],
+            "reduce_node",
+            &[("keepdims", 0)],
+        ),
     );
 
     let mut neg_one = ProtoWriter::new();
@@ -330,11 +399,23 @@ pub fn export_knn(model: &KnnModel) -> Vec<u8> {
 
     graph.write_msg_field(
         1,
-        make_node("Mul", &["dist_sq", "neg_one"], &["neg_dist"], "neg_node", &[]),
+        make_node(
+            "Mul",
+            &["dist_sq", "neg_one"],
+            &["neg_dist"],
+            "neg_node",
+            &[],
+        ),
     );
     graph.write_msg_field(
         1,
-        make_node("TopK", &["neg_dist"], &["top_values", "nearest_labels"], "topk_node", &[("axis", -1)]),
+        make_node(
+            "TopK",
+            &["neg_dist"],
+            &["top_values", "nearest_labels"],
+            "topk_node",
+            &[("axis", -1)],
+        ),
     );
 
     build_model_proto(graph, "ocr-livive-net-knn")
